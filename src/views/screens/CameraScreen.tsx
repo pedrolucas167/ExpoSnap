@@ -5,10 +5,12 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  useWindowDimensions,
+  Platform,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as Haptics from 'expo-haptics';
+import { Audio } from 'expo-av';
 import { RootStackParamList } from '../../utils/types';
 import { COLORS, SIZES } from '../../utils/theme';
 import { usePhotoController } from '../../controllers';
@@ -22,6 +24,7 @@ export default function CameraScreen({ navigation }: Props) {
   const [isReady, setIsReady] = useState(false);
   const [displayCountdown, setDisplayCountdown] = useState<number | null>(null);
   const cameraRef = useRef<CameraView>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   const { photoState, startCountdown, cancelCountdown } = usePhotoController();
 
@@ -31,11 +34,63 @@ export default function CameraScreen({ navigation }: Props) {
     }
   }, [permission]);
 
+  useEffect(() => {
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
+      }
+    };
+  }, []);
+
+  const playShutterSound = async () => {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require('../../assets/shutter.mp3'),
+        { shouldPlay: true, volume: 0.8 }
+      );
+      soundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if ('didJustFinish' in status && status.didJustFinish) {
+          sound.unloadAsync();
+        }
+      });
+    } catch (error) {
+      // Som nao disponivel, continua sem ele
+    }
+  };
+
+  const triggerHaptic = async () => {
+    if (Platform.OS !== 'web') {
+      try {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      } catch {
+        // Haptics nao disponivel
+      }
+    }
+  };
+
   const handleCapture = async () => {
     if (photoState.isCapturing) return;
 
-    const photo = await startCountdown(cameraRef, (count) => {
+    await triggerHaptic();
+
+    const photo = await startCountdown(cameraRef, async (count) => {
       setDisplayCountdown(count === 0 ? null : count);
+
+      if (count > 0 && Platform.OS !== 'web') {
+        try {
+          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        } catch {}
+      }
+
+      if (count === 0) {
+        await playShutterSound();
+        if (Platform.OS !== 'web') {
+          try {
+            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          } catch {}
+        }
+      }
     });
 
     if (photo) {
